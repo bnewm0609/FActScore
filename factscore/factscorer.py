@@ -5,13 +5,21 @@ import numpy as np
 import os
 import logging
 
+print("importing tqdm")
 from tqdm import tqdm
+print("importing is_response_abstained")
 from factscore.abstain_detection import is_response_abstained
+print("importing afg")
 from factscore.atomic_facts import AtomicFactGenerator
+print("importing clm")
 from factscore.clm import CLM
+print("importing npm")
 from factscore.npm import NPM
+print("importing OpenAIModel")
 from factscore.openai_lm import OpenAIModel
+print("importing retrieval")
 from factscore.retrieval import DocDB, Retrieval
+print("Done with imports")
 
 class FactScorer(object):
 
@@ -124,11 +132,12 @@ class FactScorer(object):
 
         if atomic_facts is not None:
             assert len(topics)==len(atomic_facts), "`topics` and `atomic_facts` should have the same length"
+            atomic_facts_sent_map = [None for af in atomic_facts]
         else:
             if self.af_generator is None:
                 self.af_generator = AtomicFactGenerator(key_path=self.openai_key,
                                                         demon_dir=os.path.join(self.data_dir, "demos"),
-                                                        gpt3_cache_file=os.path.join(self.cache_dir, "InstructGPT.pkl"))
+                                                        gpt3_cache_file=os.path.join(self.cache_dir, "Mistral7BInstruct.pkl"))
 
             # estimate the total cost of atomic fact generation
             total_words = 0
@@ -141,6 +150,7 @@ class FactScorer(object):
                 topics = tqdm(topics)
 
             atomic_facts = []
+            atomic_facts_sent_map = []
             for topic, gen in zip(topics, generations):
                 # optionally, first detect if the response is abstained
                 response_abstained = is_response_abstained(gen, self.abstain_detection_type)
@@ -148,12 +158,14 @@ class FactScorer(object):
                     atomic_facts.append(None)
                     continue
                 # continue only when the response is not abstained
-                curr_afs, _ = self.af_generator.run(gen)
-                curr_afs = [fact for _, facts in curr_afs for fact in facts]
+                curr_afs_sent_map, _ = self.af_generator.run(gen)
+                curr_afs = [fact for _, facts in curr_afs_sent_map for fact in facts]
                 if len(curr_afs)==0:
                     atomic_facts.append(None)
+                    atomic_facts_sent_map.append(curr_afs_sent_map)
                 else:
                     atomic_facts.append(curr_afs)
+                    atomic_facts_sent_map.append(curr_afs_sent_map)
                 if len(atomic_facts) % 10 == 0:
                     self.af_generator.save_cache()
 
@@ -177,11 +189,14 @@ class FactScorer(object):
         scores = []
         init_scores = []
         decisions = []
-        for topic, generation, facts in zip(topics, generations, atomic_facts):
+        sent_maps = []
+        for topic, generation, facts, sent_map in zip(topics, generations, atomic_facts, atomic_facts_sent_map):
             if facts is None:
                 decisions.append(None)
+                sent_maps.append(None)
             else:
-                decision = self._get_score(topic, generation, facts, knowledge_source)
+                # decision = self._get_score(topic, generation, facts, knowledge_source)
+                decision = self._get_score_batch(topic, generation, facts, knowledge_source)
                 score = np.mean([d["is_supported"] for d in decision])
                 
                 if gamma:
@@ -189,6 +204,7 @@ class FactScorer(object):
                     penalty = 1.0 if len(facts)>gamma else np.exp(1-gamma/len(facts))
                     score = penalty * score
                 
+                sent_maps.append(sent_map)
                 decisions.append(decision)
                 scores.append(score)
                 if len(scores) % 10 == 0:
@@ -199,6 +215,7 @@ class FactScorer(object):
         out = {"score": np.mean(scores),
                "respond_ratio": respond_ratio,
                "decisions": decisions,
+               "sent_maps": sent_maps,
                "num_facts_per_response": np.mean([len(d) for d in decisions if d is not None])}
 
         if gamma:
@@ -231,6 +248,75 @@ class FactScorer(object):
 
                 output = self.lm.generate(prompt)
 
+                if type(output[1])==np.ndarray:
+                    # when logits are available
+                    logits = np.array(output[1])
+                    assert logits.shape[0] in [32000, 32001]
+                    true_score = logits[5852]
+                    false_score = logits[7700]
+                    is_supported = true_score > false_score
+                else:
+                    # when logits are unavailable
+                    generated_answer = output[0].lower()
+                    if "true" in generated_answer or "false" in generated_answer:
+                        if "true" in generated_answer and "false" not in generated_answer:
+                            is_supported = True
+                        elif "false" in generated_answer and "true" not in generated_answer:
+                            is_supported = False
+                        else:
+                            is_supported = generated_answer.index("true") > generated_answer.index("false")
+                    else:
+                        is_supported = all([keyword not in generated_answer.lower().translate(str.maketrans("", "", string.punctuation)).split() for keyword in ["not", "cannot", "unknown", "information"]])
+
+            else:
+                is_supported = True
+
+            if is_supported and "npm" in self.model_name:
+                npprob = self.npm[knowledge_source].get_probabilty(topic, atom)
+                is_supported = npprob > 0.3
+
+            decisions.append({"atom": atom, "is_supported": is_supported})
+
+        if cost_estimate:
+            return total_words
+        else:
+            return decisions
+    
+    def _get_score_batch(self, topic, generation, atomic_facts, knowledge_source, cost_estimate=None):
+        decisions = []
+        total_words = 0
+        
+        prompts_batch = []
+        for atom in atomic_facts:
+            atom = atom.strip()
+            if self.lm:
+                passages = self.retrieval[knowledge_source].get_passages(topic, atom, k=5)
+                definition = "Answer the question about {} based on the given context.\n\n".format(topic)
+                context = ""
+                for psg_idx, psg in enumerate(reversed(passages)):
+                    context += "Title: {}\nText: {}\n\n".format(psg["title"], psg["text"].replace("<s>", "").replace("</s>", ""))
+                definition += context.strip()
+                if not definition[-1] in string.punctuation:
+                    definition += "."
+                prompt = "{}\n\nInput: {} True or False?\nOutput:".format(definition.strip(), atom.strip())
+
+                if cost_estimate:
+                    if cost_estimate == "consider_cache" and (prompt.strip() + "_0") not in self.lm.cache_dict:
+                        total_words += len(prompt.split())
+                    elif cost_estimate == "ignore_cache":
+                        total_words += len(prompt.split())
+                    continue
+                
+                prompts_batch.append(prompt)
+
+        if self.lm:
+            # breakpoint()
+            outputs = self.lm.generate_batch(prompts_batch, batch_size=16)
+        else:
+            outputs = [None for _ in atomic_facts]
+
+        for atom, output in zip(atomic_facts, outputs):
+            if self.lm:
                 if type(output[1])==np.ndarray:
                     # when logits are available
                     logits = np.array(output[1])

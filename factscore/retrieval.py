@@ -5,6 +5,7 @@ import os
 import sqlite3
 import numpy as np
 import pickle as pkl
+from filelock import FileLock
 
 from rank_bm25 import BM25Okapi
 
@@ -114,6 +115,8 @@ class Retrieval(object):
         self.db = db
         self.cache_path = cache_path
         self.embed_cache_path = embed_cache_path
+        self.cache_lock = FileLock(self.cache_path + ".lock")
+        self.embed_cache_lock = FileLock(self.embed_cache_path + ".lock")
         self.retrieval_type = retrieval_type
         self.batch_size = batch_size
         assert retrieval_type=="bm25" or retrieval_type.startswith("gtr-")
@@ -133,34 +136,38 @@ class Retrieval(object):
     
     def load_cache(self):
         if os.path.exists(self.cache_path):
-            with open(self.cache_path, "r") as f:
-                self.cache = json.load(f)
+            with self.cache_lock:
+                with open(self.cache_path, "r") as f:
+                    self.cache = json.load(f)
         else:
             self.cache = {}
         if os.path.exists(self.embed_cache_path):
-            with open(self.embed_cache_path, "rb") as f:
-                self.embed_cache = pkl.load(f)
+            with self.embed_cache_lock:
+                with open(self.embed_cache_path, "rb") as f:
+                    self.embed_cache = pkl.load(f)
         else:
             self.embed_cache = {}
     
     def save_cache(self):
         if self.add_n > 0:
-            if os.path.exists(self.cache_path):
-                with open(self.cache_path, "r") as f:
-                    new_cache = json.load(f)
-                self.cache.update(new_cache)
-            
-            with open(self.cache_path, "w") as f:
-                json.dump(self.cache, f)
+            with self.cache_lock:
+                if os.path.exists(self.cache_path):
+                    with open(self.cache_path, "r") as f:
+                        new_cache = json.load(f)
+                    self.cache.update(new_cache)
+                
+                with open(self.cache_path, "w") as f:
+                    json.dump(self.cache, f)
         
         if self.add_n_embed > 0:
-            if os.path.exists(self.embed_cache_path):
-                with open(self.embed_cache_path, "rb") as f:
-                    new_cache = pkl.load(f)
-                self.embed_cache.update(new_cache)
+            with self.embed_cache_lock:
+                if os.path.exists(self.embed_cache_path):
+                    with open(self.embed_cache_path, "rb") as f:
+                        new_cache = pkl.load(f)
+                    self.embed_cache.update(new_cache)
             
-            with open(self.embed_cache_path, "wb") as f:
-                pkl.dump(self.embed_cache, f)
+                with open(self.embed_cache_path, "wb") as f:
+                    pkl.dump(self.embed_cache, f)
 
     def get_bm25_passages(self, topic, query, passages, k):
         if topic in self.embed_cache:

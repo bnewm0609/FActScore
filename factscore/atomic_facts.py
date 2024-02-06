@@ -13,17 +13,23 @@ import time
 from nltk.tokenize import sent_tokenize
 
 from factscore.openai_lm import OpenAIModel
+from factscore.mistral import MistralModel
 
 nltk.download("punkt")
 
 
 class AtomicFactGenerator(object):
-    def __init__(self, key_path, demon_dir, gpt3_cache_file=None):
+    def __init__(self, key_path, demon_dir, gpt3_cache_file=None, model_and_tokenizer=None):
         self.nlp = spacy.load("en_core_web_sm")
         self.is_bio = True
         self.demon_path = os.path.join(demon_dir, "demons.json" if self.is_bio else "demons_complex.json")
 
-        self.openai_lm = OpenAIModel("InstructGPT", cache_file=gpt3_cache_file, key_path=key_path)
+        # self.openai_lm = OpenAIModel("InstructGPT", cache_file=gpt3_cache_file, key_path=key_path)
+        self.openai_lm = MistralModel(
+            "mistralai/Mistral-7B-Instruct-v0.2",
+            gpt3_cache_file,
+            model_and_tokenizer=model_and_tokenizer
+        )
 
         # get the demos
         with open(self.demon_path, 'r') as f:
@@ -134,9 +140,12 @@ class AtomicFactGenerator(object):
                 total_words_estimate += len(prompt.split())
             return total_words_estimate
         else:
-            for prompt in prompts:
-                output, _ = self.openai_lm.generate(prompt)
-                atoms[prompt_to_sent[prompt]] = text_to_sentences(output)
+            outputs = self.openai_lm.generate_batch(prompts)
+            for prompt, output in zip(prompts, outputs):
+                atoms[prompt_to_sent[prompt]] = text_to_sentences(output[0])
+            # for prompt in prompts:
+            #     output, _ = self.openai_lm.generate(prompt)
+            #     atoms[prompt_to_sent[prompt]] = text_to_sentences(output)
 
             for key, value in demons.items():
                 if key not in atoms:
@@ -154,7 +163,13 @@ def best_demos(query, bm25, demons_sents, k):
 # transform InstructGPT output into sentences
 def text_to_sentences(text):
     sentences = text.split("- ")[1:]
-    sentences = [sent.strip()[:-1] if sent.strip()[-1] == '\n' else sent.strip() for sent in sentences]
+    try:
+        sentences = [sent.strip()[:-1] if (sent.strip() and sent.strip()[-1] == '\n') else sent.strip() for sent in sentences]
+        # sentences = [sent.strip()[:-1] if sent.strip()[-1] == '\n' else sent.strip() for sent in sentences]
+    except IndexError:
+        print(text)
+        print(sentences)
+        raise IndexError("string index out of range")
     if len(sentences) > 0: 
         if sentences[-1][-1] != '.':
             sentences[-1] = sentences[-1] + '.' 

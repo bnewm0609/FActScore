@@ -1,4 +1,5 @@
 import numpy as np
+import nltk
 import re
 
 invalid_ppl_mentions = [
@@ -46,6 +47,9 @@ def perplexity_ai_abstain_detect(generation):
 def generic_abstain_detect(generation):
     return generation.startswith("I'm sorry") or "provide more" in generation
 
+def first_person_abstain_detect(generation):
+    return "I" in nltk.word_tokenize(nltk.sent_tokenize(generation)[0])
+
 def is_response_abstained(generation, fn_type):
     if fn_type == "perplexity_ai":
         return perplexity_ai_abstain_detect(generation)
@@ -53,6 +57,8 @@ def is_response_abstained(generation, fn_type):
     elif fn_type == "generic":
         return generic_abstain_detect(generation)
 
+    elif fn_type == "first_person":
+        return first_person_abstain_detect(generation)
     else:
         return False
 
