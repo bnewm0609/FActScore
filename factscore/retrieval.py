@@ -153,7 +153,10 @@ class Retrieval(object):
             with self.cache_lock:
                 if os.path.exists(self.cache_path):
                     with open(self.cache_path, "r") as f:
-                        new_cache = json.load(f)
+                        try:
+                            new_cache = json.load(f)
+                        except json.decoder.JSONDecodeError:
+                            print("json.decoder.JSONDecodeError when attempting to read the cache. Unable to load newest version.")
                     self.cache.update(new_cache)
                 
                 with open(self.cache_path, "w") as f:

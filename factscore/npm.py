@@ -3,6 +3,7 @@ import torch
 import time
 from collections import defaultdict
 from transformers import AutoModelForMaskedLM, AutoTokenizer
+import os
 
 from factscore.lm import LM
 from factscore.retrieval import Retrieval
@@ -20,7 +21,7 @@ class NPM(LM):
 
         self.tokenizer = AutoTokenizer.from_pretrained("facebook/" + self.model_name)
         self.mask_id = self.tokenizer.mask_token_id
-
+        # os.path.dirname(cache_file) / 
         with open("roberta_stopwords.txt", "r") as f:
             self.stopwords = set()
             for line in f:

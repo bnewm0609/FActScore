@@ -19,7 +19,7 @@ nltk.download("punkt")
 
 
 class AtomicFactGenerator(object):
-    def __init__(self, key_path, demon_dir, gpt3_cache_file=None, model_and_tokenizer=None):
+    def __init__(self, key_path, demon_dir, gpt3_cache_file=None, model_and_tokenizer=None, batch_size=16):
         self.nlp = spacy.load("en_core_web_sm")
         self.is_bio = True
         self.demon_path = os.path.join(demon_dir, "demons.json" if self.is_bio else "demons_complex.json")
@@ -37,6 +37,7 @@ class AtomicFactGenerator(object):
 
         tokenized_corpus = [doc.split(" ") for doc in self.demons.keys()]
         self.bm25 = BM25Okapi(tokenized_corpus)
+        self.batch_size = batch_size
 
     def save_cache(self):
         self.openai_lm.save_cache()
@@ -140,7 +141,7 @@ class AtomicFactGenerator(object):
                 total_words_estimate += len(prompt.split())
             return total_words_estimate
         else:
-            outputs = self.openai_lm.generate_batch(prompts)
+            outputs = self.openai_lm.generate_batch(prompts, batch_size=self.batch_size)
             for prompt, output in zip(prompts, outputs):
                 atoms[prompt_to_sent[prompt]] = text_to_sentences(output[0])
             # for prompt in prompts:

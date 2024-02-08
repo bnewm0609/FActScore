@@ -5,21 +5,13 @@ import numpy as np
 import os
 import logging
 
-print("importing tqdm")
 from tqdm import tqdm
-print("importing is_response_abstained")
 from factscore.abstain_detection import is_response_abstained
-print("importing afg")
 from factscore.atomic_facts import AtomicFactGenerator
-print("importing clm")
 from factscore.clm import CLM
-print("importing npm")
 from factscore.npm import NPM
-print("importing OpenAIModel")
 from factscore.openai_lm import OpenAIModel
-print("importing retrieval")
 from factscore.retrieval import DocDB, Retrieval
-print("Done with imports")
 
 class FactScorer(object):
 
@@ -31,7 +23,8 @@ class FactScorer(object):
                  openai_key="api.key",
                  cost_estimate="consider_cache",
                  abstain_detection_type=None,
-                 batch_size=256):
+                 batch_size=256,
+                 llm_batch_size=16):
         assert model_name in ["retrieval+llama", "retrieval+llama+npm", "retrieval+ChatGPT", "npm", "retrieval+ChatGPT+npm"]
         self.model_name = model_name
 
@@ -39,6 +32,7 @@ class FactScorer(object):
         self.retrieval = {}
         self.npm = {}
         self.batch_size = batch_size # batch size for retrieval
+        self.llm_batch_size = llm_batch_size # batch size for retrieval
         self.openai_key = openai_key
         self.abstain_detection_type = abstain_detection_type
 
@@ -115,7 +109,8 @@ class FactScorer(object):
                   gamma=10,
                   atomic_facts=None,
                   knowledge_source=None,
-                  verbose=False):
+                  verbose=False,
+                  ):
         if knowledge_source is None:
             # use the default knowledge source
             knowledge_source = "enwiki-20230401"
@@ -135,14 +130,20 @@ class FactScorer(object):
             atomic_facts_sent_map = [None for af in atomic_facts]
         else:
             if self.af_generator is None:
-                self.af_generator = AtomicFactGenerator(key_path=self.openai_key,
-                                                        demon_dir=os.path.join(self.data_dir, "demos"),
-                                                        gpt3_cache_file=os.path.join(self.cache_dir, "Mistral7BInstruct.pkl"))
+                self.af_generator = AtomicFactGenerator(
+                    key_path=self.openai_key,
+                    demon_dir=os.path.join(self.data_dir, "demos"),
+                    gpt3_cache_file=os.path.join(self.cache_dir, "Mistral7BInstruct.pkl"),
+                    batch_size=self.llm_batch_size,
+                )
 
             # estimate the total cost of atomic fact generation
             total_words = 0
             for gen in generations:
-                total_words += self.af_generator.run(gen, cost_estimate=self.cost_estimate)
+                total_words += self.af_generator.run(
+                    gen,
+                    cost_estimate=self.cost_estimate,
+                )
 
             self.print_cost_estimates(total_words, task="atomic fact generation", model="davinci-003")
 
@@ -311,7 +312,7 @@ class FactScorer(object):
 
         if self.lm:
             # breakpoint()
-            outputs = self.lm.generate_batch(prompts_batch, batch_size=16)
+            outputs = self.lm.generate_batch(prompts_batch, batch_size=self.llm_batch_size)
         else:
             outputs = [None for _ in atomic_facts]
 
