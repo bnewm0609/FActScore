@@ -6,11 +6,17 @@ import os
 import logging
 
 from tqdm import tqdm
+print("importing abstain_detection")
 from factscore.abstain_detection import is_response_abstained
+print("importing atomic_facts")
 from factscore.atomic_facts import AtomicFactGenerator
+print("importing clm")
 from factscore.clm import CLM
+print("importing npm")
 from factscore.npm import NPM
+print("importing openai_lm")
 from factscore.openai_lm import OpenAIModel
+print("importing retrieval")
 from factscore.retrieval import DocDB, Retrieval
 
 class FactScorer(object):

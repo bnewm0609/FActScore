@@ -75,6 +75,7 @@ class LM(object):
         
 
     def save_cache(self):
+        return
         if self.add_n == 0:
             return
 
@@ -87,6 +88,7 @@ class LM(object):
                 pickle.dump(self.cache_dict, f)
 
     def load_cache(self, allow_retry=True):
+        return {}
         if os.path.exists(self.cache_file):
             while True:
                 try:
