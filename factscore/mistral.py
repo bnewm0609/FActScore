@@ -59,7 +59,8 @@ class MistralModel(LM):
                 max_new_tokens=max_output_length,
                 do_sample=True,
                 num_return_sequences=1,
-            ).cpu()
+                pad_token_id=self.tokenizer.eos_token_id,
+        ).cpu()
         generations_batch = (
             self.tokenizer.batch_decode(
                 generated_ids[:, inputs.shape[1]:],
